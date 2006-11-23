@@ -64,6 +64,8 @@ def libname(path):
 class Lib(object):
     lib_index = {}
     path_dict = {}
+    libname_re = re.compile("^.*Shared library: \[(?P<f>.*)\]$")
+
     def __init__(self, filename, ignore_list, max_level, parent = None):
         self.filename = filename
         self.parent = parent
@@ -85,10 +87,9 @@ class Lib(object):
 
         out, err = run("readelf -d %s" % (Lib.path_dict.get(self.filename, self.filename)))
 
-        libname_re = re.compile("^.*Shared library: \[(?P<f>.*)\]$")
 
         for line in out:
-            match = libname_re.search(line.strip())
+            match = self.libname_re.search(line.strip())
             if match is None:
                 continue
 
@@ -109,17 +110,15 @@ class Lib(object):
 
     def dependencies(self):
         ret = set()
-        name = libname(self.filename)
         for child in self.children:
-            ret.add('"%s" -> "%s"' % (name, libname(child.filename)))
+            ret.add((self.filename, child.filename))
             ret = ret.union(child.dependencies())
         return ret
 
 
 if __name__ == "__main__":
-    depth = 3
-    ignore_list = [ 'libc.so', 'libm.so', 'libdl.so', 'libz.so',
-                    'libresolv.so', 'libpthread.so', 'librt.so', 'libnsl.so' ]
+    depth = 10
+    ignore_list = ['libc.so']
 
     parser = OptionParser()
     parser.add_option("-i", "--ignore", dest="ignore_list", action="append",
@@ -130,6 +129,9 @@ if __name__ == "__main__":
                       help="recursion depth to graph.")
     parser.add_option("-o", "--outfile", dest="outfile", metavar="FILE",
                       help="output file, use '-' for stdout.")
+    parser.add_option("-f", "--full-names", action="store_true",
+                      dest="full_names", default=False,
+                      help="use full library names.")
 
     options, args = parser.parse_args()
 
@@ -151,7 +153,14 @@ if __name__ == "__main__":
             fd = sys.stdout
 
         fd.write("digraph G {\n")
+        for x in input_libs:
+            fd.write("\t\"%(libname)s\" [style=filled];\n" %
+                     {"libname": libname(x.filename)})
         for x in deps:
-            fd.writelines((x, "\n"))
+            a, b = x
+            if not options.full_names:
+                a = libname(a)
+                b = libname(b)
+            fd.write("\t\"%s\" -> \"%s\";\n" % (a, b))
         fd.write("}\n")
 
