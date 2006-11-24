@@ -26,6 +26,7 @@
 import os
 import sys
 import re
+from fnmatch import fnmatch
 from optparse import OptionParser
 
 from subprocess import *
@@ -64,7 +65,7 @@ def libname(path):
 class Lib(object):
     lib_index = {}
     path_dict = {}
-    libname_re = re.compile("^.*Shared library: \[(?P<f>.*)\]$")
+    libname_re = re.compile("^\s0x\w+\s\(NEEDED\)\s+Shared library:\s+\[(?P<libname>[^]]+)\]\s*$")
 
     def __init__(self, filename, ignore_list, max_level, parent = None):
         self.filename = filename
@@ -82,30 +83,46 @@ class Lib(object):
     def load_children(self, ignore_list, max_level):
         out, err = run("ldd %s" % (self.filename))
         for line in out:
-            splited_line = [ x for x in line.split()[:-1] if "=>" not in x ]
-            Lib.path_dict[splited_line[0]] = splited_line[len(splited_line) == 2]
+            splited_line = [ x for x in line.split()[:-1] if x != "=>" ]
+            if len(splited_line) == 1:
+                name = splited_line[0]
+                path = name
+            elif len(splited_line) > 1:
+                name, path = splited_line[0:2]
+            else:
+                print >>sys.stderr, "Unknown line: %r" % line
+                continue
+            Lib.path_dict[name] = path
 
-        out, err = run("readelf -d %s" % (Lib.path_dict.get(self.filename, self.filename)))
-
+        path = Lib.path_dict.get(self.filename, self.filename)
+        out, err = run("readelf -W -d %s" % path)
 
         for line in out:
-            match = self.libname_re.search(line.strip())
+            match = self.libname_re.search(line)
             if match is None:
                 continue
 
-            filename = match.groupdict()['f']
-
-            if [ i for i in ignore_list if re.match(i, filename) is not None ]:
-                continue
-
-            try:
-                lib = Lib.lib_index[filename]
-            except KeyError, e:
-                lib = Lib(filename, ignore_list, max_level, self)
-                Lib.lib_index[filename] = lib
+            name = match.groupdict()['libname']
+            path = Lib.path_dict.get(name, None)
+            if not path:
+                if name == "ld-linux.so.2":
+                    continue
+                print >> sys.stderr, "Unknow library path: %r" % name
+                path = name
 
 
-            self.children.append(lib)
+            for ignore in ignore_list:
+                if fnmatch(path, ignore) or fnmatch(name, ignore):
+                    break
+            else:
+                # It's not ignored, add child
+                try:
+                    lib = Lib.lib_index[path]
+                except KeyError, e:
+                    lib = Lib(path, ignore_list, max_level, self)
+                    Lib.lib_index[path] = lib
+
+                self.children.append(lib)
 
 
     def dependencies(self):
@@ -118,20 +135,25 @@ class Lib(object):
 
 if __name__ == "__main__":
     depth = 10
-    ignore_list = ['libc.so']
+    ignore_list = ["libc.so.6"]
 
     parser = OptionParser()
     parser.add_option("-i", "--ignore", dest="ignore_list", action="append",
                       metavar="LIBRARY", default=ignore_list,
-                      help="library to ignore, maybe be used multiple times.")
+                      help=("Library to ignore, maybe be used multiple times. "
+                            "It does UNIX filename pattern matching."))
     parser.add_option("-d", "--depth", dest="depth", type="int",
                       default=depth,
-                      help="recursion depth to graph.")
+                      help="Recursion depth to graph.")
     parser.add_option("-o", "--outfile", dest="outfile", metavar="FILE",
-                      help="output file, use '-' for stdout.")
+                      help="Output file, use '-' for stdout.")
     parser.add_option("-f", "--full-names", action="store_true",
                       dest="full_names", default=False,
-                      help="use full library names.")
+                      help="Use full library names.")
+    parser.add_option("-b", "--base-names", action="store_true",
+                      dest="base_names", default=False,
+                      help=("Use just basename (not whole path) if " \
+                            "--full-names is in use."))
 
     options, args = parser.parse_args()
 
@@ -153,14 +175,29 @@ if __name__ == "__main__":
             fd = sys.stdout
 
         fd.write("digraph G {\n")
-        for x in input_libs:
-            fd.write("\t\"%(libname)s\" [style=filled];\n" %
-                     {"libname": libname(x.filename)})
+        fd.write("\t/* presentation settings */\n")
+        libs = set()
+        for a, b in deps:
+            libs.add(a)
+            libs.add(b)
+        for lib in libs:
+            extra = ""
+            basename = os.path.basename(lib)
+            for inlib in input_libs:
+                if basename == os.path.basename(inlib.filename):
+                    extra = ", style=\"filled\""
+                    break
+            if options.full_names:
+                if options.base_names:
+                    name = basename
+                else:
+                    name = lib
+            else:
+                name = libname(lib)
+            fd.write("\t\"%s\" [label=\"%s\"%s];\n" % (lib, name, extra))
+
+        fd.write("\n\t/* dependencies */\n")
         for x in deps:
-            a, b = x
-            if not options.full_names:
-                a = libname(a)
-                b = libname(b)
-            fd.write("\t\"%s\" -> \"%s\";\n" % (a, b))
+            fd.write("\t\"%s\" -> \"%s\";\n" % x)
         fd.write("}\n")
 
