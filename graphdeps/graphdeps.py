@@ -105,7 +105,7 @@ class Lib(object):
             name = match.groupdict()['libname']
             path = Lib.path_dict.get(name, None)
             if not path:
-                if name == "ld-linux.so.2":
+                if name.startswith("ld-linux.so"):
                     continue
                 print >> sys.stderr, "Unknow library path: %r" % name
                 path = name
@@ -135,7 +135,7 @@ class Lib(object):
 
 if __name__ == "__main__":
     depth = 10
-    ignore_list = ["libc.so.6"]
+    ignore_list = ["libc.so*"]
 
     parser = OptionParser()
     parser.add_option("-i", "--ignore", dest="ignore_list", action="append",
