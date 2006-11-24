@@ -66,6 +66,7 @@ class Lib(object):
     lib_index = {}
     path_dict = {}
     libname_re = re.compile("^\s0x\w+\s\(NEEDED\)\s+Shared library:\s+\[(?P<libname>[^]]+)\]\s*$")
+    ldd_re = re.compile("^\s+(?P<libname>\S+)\s+=>\s+(?P<libpath>[^(]*)\s+\(0x\w+\)\s+$")
 
     def __init__(self, filename, ignore_list, max_level, parent = None):
         self.filename = filename
@@ -83,15 +84,14 @@ class Lib(object):
     def load_children(self, ignore_list, max_level):
         out, err = run("ldd %s" % (self.filename))
         for line in out:
-            splited_line = [ x for x in line.split()[:-1] if x != "=>" ]
-            if len(splited_line) == 1:
-                name = splited_line[0]
-                path = name
-            elif len(splited_line) > 1:
-                name, path = splited_line[0:2]
+            match = self.ldd_re.search(line)
+            if match is None:
+                path = name = line.split()[0]
             else:
-                print >>sys.stderr, "Unknown line: %r" % line
-                continue
+                name = match.groupdict()["libname"]
+                path = match.groupdict()["libpath"]
+                if not path or path == "not found":
+                    path = name
             Lib.path_dict[name] = path
 
         path = Lib.path_dict.get(self.filename, self.filename)
