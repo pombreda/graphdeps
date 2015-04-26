@@ -1,0 +1,1 @@
+Generate a dot file for graphviz with the library dependencies of a ELF binary.
